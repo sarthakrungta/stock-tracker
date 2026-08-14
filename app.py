@@ -1,44 +1,98 @@
 """
 Simple Indian stock portfolio tracker.
 
-- Stores holdings in a local JSON file (data/portfolio.json).
+- Stores holdings in a SQLite database (one DB file, path set by DATA_DIR),
+  with each holding owned by a user account.
 - Fetches live prices for free via yfinance (Yahoo Finance), using the
   ".NS" suffix for NSE and ".BO" for BSE.
 - Generates Claude-friendly analysis prompts (whole portfolio / single stock)
   that you copy-paste into Claude chat yourself. This app never calls any
   AI API - it just builds the prompt text for you.
+
+Accounts are invite-only: there is no public signup page. Create accounts with
+    flask --app app create-user <username>
 """
 
-import json
 import os
 import time
-import uuid
 from pathlib import Path
 
-from flask import Flask, jsonify, request, render_template
+import click
+from flask import Flask, jsonify, request, render_template, redirect, url_for
+from flask_login import (
+    LoginManager,
+    UserMixin,
+    current_user,
+    login_required,
+    login_user,
+    logout_user,
+)
+from flask_sqlalchemy import SQLAlchemy
+from werkzeug.security import check_password_hash, generate_password_hash
 import yfinance as yf
 
 APP_DIR = Path(__file__).resolve().parent
-DATA_FILE = APP_DIR / "data" / "portfolio.json"
+DATA_DIR = Path(os.environ.get("DATA_DIR", APP_DIR / "data"))
 PRICE_CACHE_TTL = 30  # seconds
 
 app = Flask(__name__)
+app.config["SECRET_KEY"] = os.environ["SECRET_KEY"]
+
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{DATA_DIR / 'portfolio.db'}"
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+db = SQLAlchemy(app)
+
+login_manager = LoginManager(app)
+login_manager.login_view = "login"
 
 _price_cache = {}  # ticker -> (price, fetched_at)
 
 
-def load_holdings():
-    if not DATA_FILE.exists():
-        return []
-    with open(DATA_FILE, "r") as f:
-        return json.load(f)
+# ----------------------------------------------------------------- models --
+
+class User(UserMixin, db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True, nullable=False)
+    password_hash = db.Column(db.String(255), nullable=False)
+
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
 
 
-def save_holdings(holdings):
-    DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(DATA_FILE, "w") as f:
-        json.dump(holdings, f, indent=2)
+class Holding(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    symbol = db.Column(db.String(20), nullable=False)
+    name = db.Column(db.String(120), nullable=False)
+    exchange = db.Column(db.String(10), nullable=False, default="NSE")
+    quantity = db.Column(db.Float, nullable=False)
+    buy_price = db.Column(db.Float, nullable=False)
+    buy_date = db.Column(db.String(20), nullable=True)
 
+    def to_dict(self):
+        return {
+            "id": str(self.id),
+            "symbol": self.symbol,
+            "name": self.name,
+            "exchange": self.exchange,
+            "quantity": self.quantity,
+            "buy_price": self.buy_price,
+            "buy_date": self.buy_date,
+        }
+
+
+with app.app_context():
+    db.create_all()
+
+
+@login_manager.user_loader
+def load_user(user_id):
+    return db.session.get(User, int(user_id))
+
+
+# ------------------------------------------------------------------ prices --
 
 def yf_ticker(symbol, exchange):
     suffix = "NS" if exchange.upper() == "NSE" else "BO"
@@ -117,21 +171,51 @@ def enrich(holdings):
     return enriched, summary
 
 
+# --------------------------------------------------------------------- auth --
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if current_user.is_authenticated:
+        return redirect(url_for("index"))
+
+    error = None
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        user = User.query.filter_by(username=username).first()
+        if user and user.check_password(password):
+            login_user(user)
+            return redirect(url_for("index"))
+        error = "Invalid username or password"
+
+    return render_template("login.html", error=error)
+
+
+@app.route("/logout")
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for("login"))
+
+
 # ---------------------------------------------------------------- routes --
 
 @app.route("/")
+@login_required
 def index():
-    return render_template("index.html")
+    return render_template("index.html", username=current_user.username)
 
 
 @app.route("/api/holdings", methods=["GET"])
+@login_required
 def get_holdings():
-    holdings = load_holdings()
+    holdings = [h.to_dict() for h in Holding.query.filter_by(user_id=current_user.id)]
     enriched, summary = enrich(holdings)
     return jsonify({"holdings": enriched, "summary": summary})
 
 
 @app.route("/api/holdings", methods=["POST"])
+@login_required
 def add_holding():
     body = request.get_json(force=True)
     required = ["symbol", "name", "exchange", "quantity", "buy_price"]
@@ -139,51 +223,55 @@ def add_holding():
     if missing:
         return jsonify({"error": f"Missing fields: {', '.join(missing)}"}), 400
 
-    holding = {
-        "id": str(uuid.uuid4()),
-        "symbol": body["symbol"].strip().upper(),
-        "name": body["name"].strip(),
-        "exchange": body.get("exchange", "NSE").strip().upper(),
-        "quantity": float(body["quantity"]),
-        "buy_price": float(body["buy_price"]),
-        "buy_date": body.get("buy_date") or None,
-    }
-    holdings = load_holdings()
-    holdings.append(holding)
-    save_holdings(holdings)
-    return jsonify(holding), 201
+    holding = Holding(
+        user_id=current_user.id,
+        symbol=body["symbol"].strip().upper(),
+        name=body["name"].strip(),
+        exchange=body.get("exchange", "NSE").strip().upper(),
+        quantity=float(body["quantity"]),
+        buy_price=float(body["buy_price"]),
+        buy_date=body.get("buy_date") or None,
+    )
+    db.session.add(holding)
+    db.session.commit()
+    return jsonify(holding.to_dict()), 201
 
 
 @app.route("/api/holdings/<holding_id>", methods=["PUT"])
+@login_required
 def update_holding(holding_id):
     body = request.get_json(force=True)
-    holdings = load_holdings()
-    for h in holdings:
-        if h["id"] == holding_id:
-            for field in ["symbol", "name", "exchange", "buy_date"]:
-                if field in body and body[field] not in (None, ""):
-                    h[field] = body[field].strip().upper() if field in ("symbol", "exchange") else body[field]
-            for field in ["quantity", "buy_price"]:
-                if field in body and body[field] not in (None, ""):
-                    h[field] = float(body[field])
-            save_holdings(holdings)
-            return jsonify(h)
-    return jsonify({"error": "Not found"}), 404
+    holding = Holding.query.filter_by(id=holding_id, user_id=current_user.id).first()
+    if not holding:
+        return jsonify({"error": "Not found"}), 404
+
+    for field in ["symbol", "name", "exchange", "buy_date"]:
+        if field in body and body[field] not in (None, ""):
+            value = body[field].strip().upper() if field in ("symbol", "exchange") else body[field]
+            setattr(holding, field, value)
+    for field in ["quantity", "buy_price"]:
+        if field in body and body[field] not in (None, ""):
+            setattr(holding, field, float(body[field]))
+
+    db.session.commit()
+    return jsonify(holding.to_dict())
 
 
 @app.route("/api/holdings/<holding_id>", methods=["DELETE"])
+@login_required
 def delete_holding(holding_id):
-    holdings = load_holdings()
-    new_holdings = [h for h in holdings if h["id"] != holding_id]
-    if len(new_holdings) == len(holdings):
+    holding = Holding.query.filter_by(id=holding_id, user_id=current_user.id).first()
+    if not holding:
         return jsonify({"error": "Not found"}), 404
-    save_holdings(new_holdings)
+    db.session.delete(holding)
+    db.session.commit()
     return jsonify({"ok": True})
 
 
 @app.route("/api/refresh", methods=["POST"])
+@login_required
 def refresh_prices():
-    holdings = load_holdings()
+    holdings = [h.to_dict() for h in Holding.query.filter_by(user_id=current_user.id)]
     tickers = [yf_ticker(h["symbol"], h["exchange"]) for h in holdings]
     fetch_prices(tickers, force=True)
     enriched, summary = enrich(holdings)
@@ -492,20 +580,71 @@ Focus on information that affects the investment case TODAY.
 """
 
 @app.route("/api/prompts/portfolio", methods=["GET"])
+@login_required
 def prompt_portfolio():
-    holdings = load_holdings()
+    holdings = [h.to_dict() for h in Holding.query.filter_by(user_id=current_user.id)]
     enriched, summary = enrich(holdings)
     return jsonify({"prompt": build_portfolio_prompt(enriched, summary)})
 
 
 @app.route("/api/prompts/holding/<holding_id>", methods=["GET"])
+@login_required
 def prompt_holding(holding_id):
-    holdings = load_holdings()
-    enriched, _ = enrich(holdings)
-    for e in enriched:
-        if e["id"] == holding_id:
-            return jsonify({"prompt": build_stock_prompt(e)})
-    return jsonify({"error": "Not found"}), 404
+    holding = Holding.query.filter_by(id=holding_id, user_id=current_user.id).first()
+    if not holding:
+        return jsonify({"error": "Not found"}), 404
+    enriched, _ = enrich([holding.to_dict()])
+    return jsonify({"prompt": build_stock_prompt(enriched[0])})
+
+
+# --------------------------------------------------------------- CLI --
+
+@app.cli.command("create-user")
+@click.argument("username")
+def create_user(username):
+    """Create a new invite-only account: flask --app app create-user <username>"""
+    if User.query.filter_by(username=username).first():
+        click.echo(f"User '{username}' already exists.")
+        return
+    password = click.prompt("Password", hide_input=True, confirmation_prompt=True)
+    user = User(username=username, password_hash=generate_password_hash(password))
+    db.session.add(user)
+    db.session.commit()
+    click.echo(f"Created user '{username}'.")
+
+
+@app.cli.command("import-json")
+@click.argument("username")
+@click.argument("json_path", default=str(DATA_DIR / "portfolio.json"))
+def import_json(username, json_path):
+    """One-off migration: flask --app app import-json <username> [path/to/portfolio.json]"""
+    import json as _json
+
+    user = User.query.filter_by(username=username).first()
+    if not user:
+        click.echo(f"No such user '{username}'. Create it first with create-user.")
+        return
+
+    path = Path(json_path)
+    if not path.exists():
+        click.echo(f"No JSON file found at {path}")
+        return
+
+    with open(path) as f:
+        holdings = _json.load(f)
+
+    for h in holdings:
+        db.session.add(Holding(
+            user_id=user.id,
+            symbol=h["symbol"],
+            name=h["name"],
+            exchange=h.get("exchange", "NSE"),
+            quantity=float(h["quantity"]),
+            buy_price=float(h["buy_price"]),
+            buy_date=h.get("buy_date"),
+        ))
+    db.session.commit()
+    click.echo(f"Imported {len(holdings)} holdings into '{username}'.")
 
 
 if __name__ == "__main__":

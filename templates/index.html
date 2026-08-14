@@ -10,6 +10,7 @@
   <header class="topbar">
     <h1>📈 My Indian Stock Portfolio</h1>
     <div class="topbar-actions">
+      <span class="user-info">Signed in as {{ username }} · <a href="{{ url_for('logout') }}">Logout</a></span>
       <button id="refreshBtn" class="btn btn-secondary">Refresh Prices</button>
       <button id="analyzePortfolioBtn" class="btn btn-primary">Analyze Full Portfolio</button>
     </div>
