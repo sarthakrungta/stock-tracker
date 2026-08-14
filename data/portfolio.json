@@ -1,0 +1,56 @@
+[
+  {
+    "id": "2a447646-0463-4567-8815-ede51065f092",
+    "symbol": "APLAPOLLO",
+    "name": "APL Apollo Tubes Ltd",
+    "exchange": "NSE",
+    "quantity": 90.0,
+    "buy_price": 1927.66,
+    "buy_date": null
+  },
+  {
+    "id": "e9bb2afc-3346-4252-b117-5cb63e932f5b",
+    "symbol": "GPIL",
+    "name": "Godawari Power",
+    "exchange": "NSE",
+    "quantity": 650.0,
+    "buy_price": 285.78,
+    "buy_date": null
+  },
+  {
+    "id": "44202dd3-8665-4d58-8113-952ebfb79cf6",
+    "symbol": "CAPLIPOINT",
+    "name": "Caplin Point Laboratories",
+    "exchange": "NSE",
+    "quantity": 48.0,
+    "buy_price": 2034.0,
+    "buy_date": null
+  },
+  {
+    "id": "a83b9b73-a0bf-4500-9133-89b58e8a13ee",
+    "symbol": "HDFCBANK",
+    "name": "HDFC Bank",
+    "exchange": "NSE",
+    "quantity": 50.0,
+    "buy_price": 790.28,
+    "buy_date": null
+  },
+  {
+    "id": "e225e9f7-4645-4271-931d-6c8da64a9c1e",
+    "symbol": "COALINDIA",
+    "name": "Coal India",
+    "exchange": "NSE",
+    "quantity": 75.0,
+    "buy_price": 486.0,
+    "buy_date": null
+  },
+  {
+    "id": "6bc9c3a7-2554-4b97-beb3-f28720e74daa",
+    "symbol": "NTPC",
+    "name": "NTPC Ltd",
+    "exchange": "NSE",
+    "quantity": 60.0,
+    "buy_price": 355.0,
+    "buy_date": null
+  }
+]

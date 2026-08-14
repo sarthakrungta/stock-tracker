@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Portfolio Tracker</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>📈 My Indian Stock Portfolio</h1>
+    <div class="topbar-actions">
+      <button id="refreshBtn" class="btn btn-secondary">Refresh Prices</button>
+      <button id="analyzePortfolioBtn" class="btn btn-primary">Analyze Full Portfolio</button>
+    </div>
+  </header>
+
+  <section class="summary-cards" id="summaryCards">
+    <div class="card">
+      <div class="card-label">Total Invested</div>
+      <div class="card-value" id="sumInvested">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Current Value</div>
+      <div class="card-value" id="sumCurrent">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Total P/L</div>
+      <div class="card-value" id="sumPL">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Total P/L %</div>
+      <div class="card-value" id="sumPLPct">—</div>
+    </div>
+  </section>
+
+  <section class="add-form-section">
+    <h2>Add a Holding</h2>
+    <form id="addForm" class="add-form">
+      <input type="text" id="symbol" placeholder="Symbol e.g. RELIANCE" required />
+      <input type="text" id="name" placeholder="Company Name e.g. Reliance Industries" required />
+      <select id="exchange">
+        <option value="NSE" selected>NSE</option>
+        <option value="BSE">BSE</option>
+      </select>
+      <input type="number" id="quantity" placeholder="Quantity" min="0" step="any" required />
+      <input type="number" id="buyPrice" placeholder="Buy Price (₹)" min="0" step="any" required />
+      <input type="date" id="buyDate" placeholder="Buy Date" />
+      <button type="submit" class="btn btn-primary">Add Stock</button>
+    </form>
+    <p class="hint">For BSE, enter the numeric scrip code as the Symbol (e.g. 500325). NSE symbols are the usual trading symbols (e.g. RELIANCE, TCS, INFY).</p>
+  </section>
+
+  <section class="table-section">
+    <table id="holdingsTable">
+      <thead>
+        <tr>
+          <th>Symbol</th>
+          <th>Name</th>
+          <th>Exch</th>
+          <th>Qty</th>
+          <th>Buy Price</th>
+          <th>Current Price</th>
+          <th>Invested</th>
+          <th>Current Value</th>
+          <th>P/L</th>
+          <th>P/L %</th>
+          <th>Weight</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="holdingsBody">
+        <tr><td colspan="12" class="empty-row">No holdings yet — add your first stock above.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <div id="promptModal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 id="promptModalTitle">Claude Prompt</h3>
+        <button id="closeModalBtn" class="btn-icon">✕</button>
+      </div>
+      <textarea id="promptText" readonly></textarea>
+      <div class="modal-footer">
+        <span id="copyStatus" class="copy-status"></span>
+        <button id="copyPromptBtn" class="btn btn-primary">Copy Prompt</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
