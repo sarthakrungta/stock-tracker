@@ -1,8 +1,9 @@
 """
 Simple Indian stock portfolio tracker.
 
-- Stores holdings in a SQLite database (one DB file, path set by DATA_DIR),
-  with each holding owned by a user account.
+- Stores holdings in Postgres (connection string via DATABASE_URL), with each
+  holding owned by a user account. Schema changes go through Flask-Migrate
+  (Alembic) - see migrations/.
 - Fetches live prices for free via yfinance (Yahoo Finance), using the
   ".NS" suffix for NSE and ".BO" for BSE.
 - Generates Claude-friendly analysis prompts (whole portfolio / single stock)
@@ -27,22 +28,30 @@ from flask_login import (
     login_user,
     logout_user,
 )
+from flask_migrate import Migrate
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import check_password_hash, generate_password_hash
 import yfinance as yf
 
 APP_DIR = Path(__file__).resolve().parent
-DATA_DIR = Path(os.environ.get("DATA_DIR", APP_DIR / "data"))
 PRICE_CACHE_TTL = 30  # seconds
+
+
+def _database_uri():
+    url = os.environ["DATABASE_URL"]
+    # Railway/Heroku-style URLs use the "postgres://" scheme; SQLAlchemy needs "postgresql://".
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql://", 1)
+    return url
+
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ["SECRET_KEY"]
-
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{DATA_DIR / 'portfolio.db'}"
+app.config["SQLALCHEMY_DATABASE_URI"] = _database_uri()
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 db = SQLAlchemy(app)
+migrate = Migrate(app, db)
 
 login_manager = LoginManager(app)
 login_manager.login_view = "login"
@@ -81,10 +90,6 @@ class Holding(db.Model):
             "buy_price": self.buy_price,
             "buy_date": self.buy_date,
         }
-
-
-with app.app_context():
-    db.create_all()
 
 
 @login_manager.user_loader
@@ -611,40 +616,6 @@ def create_user(username):
     db.session.add(user)
     db.session.commit()
     click.echo(f"Created user '{username}'.")
-
-
-@app.cli.command("import-json")
-@click.argument("username")
-@click.argument("json_path", default=str(DATA_DIR / "portfolio.json"))
-def import_json(username, json_path):
-    """One-off migration: flask --app app import-json <username> [path/to/portfolio.json]"""
-    import json as _json
-
-    user = User.query.filter_by(username=username).first()
-    if not user:
-        click.echo(f"No such user '{username}'. Create it first with create-user.")
-        return
-
-    path = Path(json_path)
-    if not path.exists():
-        click.echo(f"No JSON file found at {path}")
-        return
-
-    with open(path) as f:
-        holdings = _json.load(f)
-
-    for h in holdings:
-        db.session.add(Holding(
-            user_id=user.id,
-            symbol=h["symbol"],
-            name=h["name"],
-            exchange=h.get("exchange", "NSE"),
-            quantity=float(h["quantity"]),
-            buy_price=float(h["buy_price"]),
-            buy_date=h.get("buy_date"),
-        ))
-    db.session.commit()
-    click.echo(f"Imported {len(holdings)} holdings into '{username}'.")
 
 
 if __name__ == "__main__":

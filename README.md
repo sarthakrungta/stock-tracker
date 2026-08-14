@@ -6,22 +6,20 @@ Each user has their own private, invite-only account and portfolio.
 
 ## Run it locally
 
+Needs a Postgres database to connect to (a free local Postgres install works fine —
+`brew install postgresql@14` on macOS, then `createdb stocktracker`).
+
 ```bash
 cd stock-tracker
 pip3 install -r requirements.txt
 export SECRET_KEY=dev-secret-change-me
-flask --app app create-user me        # first run only: create your account
+export DATABASE_URL=postgresql:///stocktracker    # adjust to your local Postgres
+flask --app app db upgrade                        # creates the tables
+flask --app app create-user me                     # first run only: create your account
 python3 app.py
 ```
 
 Open http://127.0.0.1:5050 in your browser and log in with the account you just created.
-
-If you have an existing `data/portfolio.json` from before accounts were added, import
-it into a user once:
-
-```bash
-flask --app app import-json me
-```
 
 ## How it works
 
@@ -38,8 +36,8 @@ flask --app app import-json me
   AI API itself; it only generates the prompt text.
 - **Accounts**: invite-only. There's no public signup page — the owner creates an
   account for each person (see below). Every user only ever sees their own holdings.
-- **Storage**: holdings live in a SQLite database (`data/portfolio.db` by default,
-  or wherever `DATA_DIR` points), one file for all users.
+- **Storage**: Postgres (connection string via `DATABASE_URL`), two tables —
+  `user` and `holding` — managed through Flask-Migrate/Alembic (`migrations/`).
 
 ## Notes
 
@@ -49,37 +47,70 @@ flask --app app import-json me
   so if Yahoo changes something upstream, `pip3 install --upgrade yfinance` is
   usually the fix.
 
-## Deploying on Render
+## Changing the schema (e.g. adding a column)
 
-1. Push this repo to GitHub (or connect it directly if already pushed) and create
-   a new **Web Service** on Render pointing at it.
-2. Build command: `pip install -r requirements.txt`
-   Start command: `gunicorn app:app` (already declared in the `Procfile`).
-3. Add a **Persistent Disk** to the service (e.g. mounted at `/var/data`) so the
-   SQLite database survives redeploys and restarts — it's the only thing kept on
-   local disk, and Render's default filesystem is otherwise ephemeral.
-4. Set environment variables on the service:
+Schema changes go through Alembic migrations, so they apply the same way locally
+and in production:
+
+```bash
+# 1. Edit the model in app.py, e.g. add a column to Holding:
+#    sector = db.Column(db.String(50))
+
+# 2. Generate a migration from the model diff:
+flask --app app db migrate -m "add sector to holding"
+
+# 3. Review the generated file in migrations/versions/ (autogenerate is usually
+#    right for simple additive changes, but always read it before applying).
+
+# 4. Apply it:
+flask --app app db upgrade
+```
+
+In production, run `flask --app app db upgrade` (via `railway run`, see below)
+after deploying the new code — same command, same migration file.
+
+## Visualizing / editing the data
+
+Since storage is Postgres, any standard Postgres GUI works — point it at the
+`DATABASE_URL` connection string:
+- **TablePlus / DBeaver / pgAdmin** (desktop apps) — browse and edit rows directly.
+- **Railway's dashboard** — the Postgres service has a built-in "Data" tab for
+  browsing/querying tables without installing anything.
+- **`psql`** from the terminal for quick queries:
+  ```bash
+  psql "$DATABASE_URL"
+  ```
+
+## Deploying on Railway
+
+1. Push this repo to GitHub, then in Railway: **New Project → Deploy from GitHub repo**
+   and pick it (or use the Railway CLI: `railway init` + `railway up` from this folder).
+2. Add a **Postgres** database to the project (**New → Database → Add PostgreSQL**).
+   Railway automatically injects `DATABASE_URL` into your app service's environment
+   when both are in the same project — no manual wiring needed.
+3. Railway auto-detects Python and honors the `Procfile` (`web: gunicorn app:app`) as
+   the start command — no build/start config needed.
+4. Set environment variables on the app service (Service → Variables):
    - `SECRET_KEY` — any long random string (used to sign session cookies).
-   - `DATA_DIR` — the disk mount path, e.g. `/var/data`.
-5. Deploy. On first deploy the database is created automatically but has no
-   users yet — see "Inviting a user" below.
+5. Deploy, then run the initial migration once against the deployed database:
+   ```bash
+   railway run --service <app-service-name> flask --app app db upgrade
+   ```
+6. Railway gives you a public `*.up.railway.app` URL (or attach a custom domain)
+   with HTTPS handled automatically. The database has no users yet — see
+   "Inviting a user" below.
 
 ### Inviting a user
 
 Accounts are created from the command line, not a signup form. Run this against
-the deployed service (Render's dashboard has a "Shell" tab for the service, or
-use a one-off job):
+the deployed service using the Railway CLI, which runs a command inside the live
+container:
 
 ```bash
-flask --app app create-user <username>
+railway run --service <app-service-name> flask --app app create-user <username>
 ```
 
-It prompts for a password interactively. Share the username/password with the
-person you're inviting; they log in at your Render URL.
-
-If you're migrating your own existing local holdings, copy `data/portfolio.json`
-onto the instance (or re-add them by hand) and run:
-
-```bash
-flask --app app import-json <username>
-```
+(Alternatively, open a shell to the service from the Railway dashboard and run
+`flask --app app create-user <username>` directly.) It prompts for a password
+interactively. Share the username/password with the person you're inviting; they
+log in at your Railway URL.
